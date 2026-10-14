@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Game-independent tests for the save JSON helpers. Run: dotnet run, in this folder. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../src/MorePlayers/SaveJson.cs" Link="SaveJson.cs" />
+  </ItemGroup>
+</Project>

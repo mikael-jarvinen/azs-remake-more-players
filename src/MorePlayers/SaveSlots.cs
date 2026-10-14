@@ -9,71 +9,113 @@ using Il2CppInterop.Runtime.InteropTypes.Arrays;
 using Vertigo.AZS2;
 using Vertigo.AZS2.Client;
 using Vertigo.ECS;
+using Vertigo.Firebase;
+using Vertigo.Networking;
 
 namespace AZS1HD.MorePlayers;
 
 /// <summary>
 /// Per-player save data for more than 2 players.
 ///
-/// The checkpoint save (GameStateTO) has a PlayerTO[] of length 2. When the host saves, every savable
-/// (hands, inventory, health, resources) writes the local player into players[0] and EVERY remote player
-/// into players[1], so with 3+ players the remote players overwrite each other. When the host sends the
-/// save to the clients it sets playerIndexToLoad = 1 for all of them, so every client loads the same
-/// entry. Result: a client loses its loadout and gets another player's.
+/// The checkpoint save (GameStateTO) has a PlayerTO[] of length 2. The game writes the local player into
+/// players[0] and EVERY remote player into players[1], and the host tells every joiner to load players[1].
 ///
-/// Fix: use the player's network slot id (IdentityModule.SlotId: host 0, joiners 1, 2, ...) as the index.
-///  - Host, on save: grow the players array to fit every slot and redirect each UpdateSaveData call to
-///    players[slot] instead of players[1].
-///  - Everyone, on load: set playerIndexToLoad to the local player's slot before the savables read it.
-///  - Host, on load: also move key items of players[2+] to the host inventory, like the game does for players[1].
+/// Fix: every save entry belongs to one player account (the Firebase user id, which never changes).
+///  - Host, on save: each pawn is written to its account's entry. The table account -> entry is kept per save
+///    in BepInEx/config/azs1hd.moreplayers.saveentries.json, so it survives restarts. The host is always entry 0.
+///  - Host, when sending the save to a joiner: the save travels as JSON, once per recipient; the joiner's entry
+///    index is written into its copy ("playerIndexToLoad").
+///  - Host, on load: key items of players[2+] are moved to the host inventory, like the game does for players[1].
+/// Network slots are NOT used: they follow the order players finish loading into a level and change between
+/// levels (1.3.0 - 1.4.1 keyed entries by slot, which swapped loadouts).
 /// </summary>
 [HarmonyPatch]
 internal static class SaveSlotPatches
 {
     private static GameStateTO current;      // the GameStateTO being written right now (host side)
-    private static int lastLoggedLoadSlot = -2;
+    private static bool loggedNoIdentity;
 
-    // ---- helpers -------------------------------------------------------------------------------------------------
-
-    private static int SlotOf(Entity pawn)
-    {
-        try
-        {
-            if (pawn == null) return -1;
-            var id = pawn.GetModule<IdentityModule>();
-            if (id == null || id.IsAI || id.IsSpectator) return -1;
-            return id.SlotId;
-        }
-        catch { return -1; }
-    }
+    // ---- identity --------------------------------------------------------------------------------------------------
 
     private static PlayerGameSystem Players()
     {
+        try { return ClientGame.Exists ? ClientGame.Instance?.GetSystem<PlayerGameSystem>() : null; }
+        catch { return null; }
+    }
+
+    private static FirebaseUserToNetworkMappingSystem UserMapping()
+    {
+        try { return ClientGame.Exists ? ClientGame.Instance?.GetSystem<FirebaseUserToNetworkMappingSystem>() : null; }
+        catch { return null; }
+    }
+
+    private static bool IsRealPlayer(Entity pawn)
+    {
         try
         {
-            if (!ClientGame.Exists) return null;
-            return ClientGame.Instance?.GetSystem<PlayerGameSystem>();
+            var id = pawn?.GetModule<IdentityModule>();
+            return id != null && !id.IsAI && !id.IsSpectator;
+        }
+        catch { return false; }
+    }
+
+    private static bool UserForHost(Host host, out string userId, out string name)
+    {
+        userId = null; name = null;
+        try
+        {
+            var map = UserMapping();
+            if (map == null || host == null) return false;
+            if (!map.TryGetFirebaseUserForHost(host, out User user) || string.IsNullOrEmpty(user.UserId)) return false;
+            userId = user.UserId;
+            try { name = user.DisplayName.ToString(); } catch { }
+            return true;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>Account id of a remote pawn (null when unknown).</summary>
+    private static string UserOfPawn(Entity pawn, out string name)
+    {
+        name = null;
+        try
+        {
+            var net = Players()?.PlayerNetworking;
+            if (net == null || !net.TryGetHostForPawn(pawn, out Host host)) return null;
+            return UserForHost(host, out string id, out name) ? id : null;
         }
         catch { return null; }
     }
 
-    private static int LocalSlot()
+    private static string SaveKey(int slot, int saveTypeId) => $"{saveTypeId}:{slot}";
+
+    // ---- host: save ------------------------------------------------------------------------------------------------
+
+    /// <summary>Entry index for a pawn in the save being written, or -1 to leave the game's choice alone.</summary>
+    private static int EntryFor(GameStateTO data, Entity pawn)
     {
         var ps = Players();
-        return ps == null ? -1 : SlotOf(ps.LocalPawn);
+        if (ps == null || data == null || pawn == null || !IsRealPlayer(pawn)) return -1;
+        if (ps.LocalPawn != null && ps.LocalPawn.Pointer == pawn.Pointer) return 0;
+        string user = UserOfPawn(pawn, out string name);
+        if (user == null)
+        {
+            if (!loggedNoIdentity) { loggedNoIdentity = true; Plugin.Logger.LogWarning("Save: could not identify a remote player's account; using the game's default save entry for them."); }
+            return -1;
+        }
+        return SaveEntryTable.GetOrAssign(SaveKey(data.slot, data.saveTypeID), user, name, int.MaxValue);
     }
 
-    /// <summary>Make sure data.players has an entry for every connected player's slot.</summary>
+    /// <summary>Grow data.players so every connected player's entry exists.</summary>
     private static void EnsureCapacity(GameStateTO data)
     {
         var ps = Players();
         if (ps == null || data == null) return;
-        int maxSlot = SlotOf(ps.LocalPawn);
+        int needed = 2;
         var remotes = ps.remotePawns;
         if (remotes != null)
             for (int i = 0; i < remotes.Count; i++)
-                maxSlot = Math.Max(maxSlot, SlotOf(remotes[i]));
-        int needed = maxSlot + 1;
+                needed = Math.Max(needed, EntryFor(data, remotes[i]) + 1);
         var players = data.players;
         int have = players != null ? players.Length : 0;
         if (needed <= have) return;
@@ -82,21 +124,18 @@ internal static class SaveSlotPatches
         for (int i = 0; i < needed; i++)
             grown[i] = i < have && players[i] != null ? players[i] : new PlayerTO();
         data.players = grown;
-        Plugin.Logger.LogInfo($"Save: player array grown from {have} to {needed} entries (slots in use up to {maxSlot}).");
+        Plugin.Logger.LogInfo($"Save: player array grown from {have} to {needed} entries.");
     }
 
-    /// <summary>Index in data.players that this pawn's data belongs to, or -1 to leave the game's choice alone.</summary>
     private static int RedirectIndex(Entity pawn)
     {
         var data = current;
         if (data == null) return -1;
-        int slot = SlotOf(pawn);
+        int i = EntryFor(data, pawn);
         var players = data.players;
-        if (slot < 0 || players == null || slot >= players.Length || players[slot] == null) return -1;
-        return slot;
+        if (i < 0 || players == null || i >= players.Length || players[i] == null) return -1;
+        return i;
     }
-
-    // ---- host: save ------------------------------------------------------------------------------------------------
 
     private static void BeginSave(GameStateTO data)
     {
@@ -115,7 +154,7 @@ internal static class SaveSlotPatches
     [HarmonyPatch(typeof(ResourcesSavable), nameof(ResourcesSavable.OnSaveData))] [HarmonyPostfix] private static void Res_Save_Post() => EndSave();
 
     // The game calls these once for the local pawn with players[0].x and once per remote pawn with players[1].x.
-    // Redirect the target to players[slot].x.
+    // Redirect the target to the entry of the pawn's account.
     [HarmonyPatch(typeof(HandsSavable), "UpdateSaveData")]
     [HarmonyPrefix]
     private static void Hands_Update_Pre(ref HandsTO saveData, Entity pawn)
@@ -145,48 +184,43 @@ internal static class SaveSlotPatches
     private static void Health_Update_Pre(ref PlayerTO data, Entity entity)
     {
         int i = RedirectIndex(entity);
-        if (i >= 0)
-        {
-            data = current.players[i];
-            if (Plugin.Verbose.Value) Plugin.Logger.LogInfo($"Save: pawn slot {i} written to players[{i}]");
-        }
+        if (i >= 0) data = current.players[i];
     }
 
-    // ---- everyone: load --------------------------------------------------------------------------------------------
-
-    private static void FixLoadIndex(GameStateTO data, string who)
+    // ---- host: send each joiner its own entry -------------------------------------------------------------------
+    // ClientSaveGameSystem serializes the save once (with playerIndexToLoad = 1) and queues one transfer per remote
+    // player, also for players joining later. Each recipient gets its own copy with its own entry index; the
+    // shared buffer is never modified, because transfers are compressed asynchronously from it.
+    [HarmonyPatch(typeof(LargeDataTransferSystem), nameof(LargeDataTransferSystem.QueueTransfer),
+        new[] { typeof(LocalHost), typeof(RemoteHost), typeof(Il2CppStructArray<byte>), typeof(bool) })]
+    [HarmonyPrefix]
+    private static void QueueTransfer_Pre(RemoteHost receivingHost, ref Il2CppStructArray<byte> data)
     {
         try
         {
-            if (data == null) return;
-            int slot = LocalSlot();
-            var players = data.players;
-            if (slot < 0 || players == null) return;
-            if (slot >= players.Length)
+            if (data == null || data.Length < 64) return;
+            byte[] bytes = data;   // managed copy
+            if (!SaveJson.TryReadHeader(bytes, out var header)) return;
+            if (!UserForHost(receivingHost, out string user, out string name))
             {
-                if (lastLoggedLoadSlot != slot)
-                {
-                    lastLoggedLoadSlot = slot;
-                    Plugin.Logger.LogWarning($"Load: local slot {slot} but the save only has {players.Length} player entries (old save?). Using the game's index {data.playerIndexToLoad}.");
-                }
+                Plugin.Logger.LogWarning($"Load: unknown account for a joining player, sending the game's default entry {header.PlayerIndexToLoad}.");
                 return;
             }
-            if (data.playerIndexToLoad != slot)
+            int index = SaveEntryTable.GetOrAssign(SaveKey(header.Slot, header.SaveTypeId), user, name, header.PlayerCount);
+            if (index < 1 || index >= header.PlayerCount || index > 9)
             {
-                Plugin.Logger.LogInfo($"Load ({who}): playerIndexToLoad {data.playerIndexToLoad} -> {slot} (local player slot)");
-                data.playerIndexToLoad = slot;
+                Plugin.Logger.LogInfo($"Load: {name ?? user} has no entry in this save yet; they get the default entry {header.PlayerIndexToLoad} until the next save.");
+                return;
             }
+            if (index != header.PlayerIndexToLoad)
+                data = new Il2CppStructArray<byte>(SaveJson.WithPlayerIndex(bytes, header, index));
+            Plugin.Logger.LogInfo($"Load: sending save to {name ?? user}: entry {index} of {header.PlayerCount}.");
         }
         catch (Exception e)
         {
-            Plugin.Logger.LogError($"Load index fix failed: {e}");
+            Plugin.Logger.LogError($"Load index rewrite failed: {e}");
         }
     }
-
-    [HarmonyPatch(typeof(HandsSavable), nameof(HandsSavable.OnLoadData))]         [HarmonyPrefix] private static void Hands_Load_Pre(GameStateTO data) => FixLoadIndex(data, "hands");
-    [HarmonyPatch(typeof(InventorySavable), nameof(InventorySavable.OnLoadData))] [HarmonyPrefix] private static void Inv_Load_Pre(GameStateTO data) => FixLoadIndex(data, "inventory");
-    [HarmonyPatch(typeof(HealthSavable), nameof(HealthSavable.OnLoadData))]       [HarmonyPrefix] private static void Health_Load_Pre(GameStateTO data) => FixLoadIndex(data, "health");
-    [HarmonyPatch(typeof(ResourcesSavable), nameof(ResourcesSavable.OnLoadData))] [HarmonyPrefix] private static void Res_Load_Pre(GameStateTO data) => FixLoadIndex(data, "resources");
 
     // ---- host: key items of players 3 and 4 ------------------------------------------------------------------------
     // The game moves key items from players[1] into the host's inventory when a save is loaded. Do the same for players[2+].

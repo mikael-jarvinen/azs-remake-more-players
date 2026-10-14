@@ -12,7 +12,8 @@ in the game files is modified.
 - Campaign lobbies you host get up to 4 slots (configurable 2-4). Horde is unchanged.
 - Joiners take the lobby size from the host automatically, nothing to coordinate.
 - **Everyone keeps their own loadout.** The game's checkpoint save only had room for 2 players; without the fix players
-  2-4 would swap loadouts at every checkpoint and level change.
+  2-4 would swap loadouts at every checkpoint and level change. Loadouts are tied to each player's account, so they
+  stay with the right person no matter in which order people join or load into a level.
 - Public lobbies stay at 2 players unless the host opts in, so strangers without the mod can't break your game.
 - With the mod installed you can still join normal 2-player games and play Horde as usual.
 - Optional difficulty scaling (off by default): more zombies and more ammo per extra player.
@@ -58,10 +59,14 @@ The remake runs on the Arizona Sunshine 2 engine code (Unity 2022.3, IL2CPP). Th
 | `MatchmakingSystem.TryStartMatchmaking` is called with 2 players per team when a campaign lobby is hosted | Hosted private / friends-only campaign lobbies get `CampaignLobbySize` slots (party size and Photon room size) |
 | `LevelSettingsTO.maxPlayers` sets server slots, max connections, the "room full" check and the network entity id ranges on every machine | Follows the size of the party you are in (original value restored afterwards) |
 | `SteamMatchmaking.CreateLobby` member limit | Raised |
-| The hands / inventory / health / resources savables write the host to save entry 0 and every other player to entry 1 | Keyed by each player's network slot; the save's player array grows as needed |
+| The hands / inventory / health / resources savables write the host to save entry 0 and every other player to entry 1 | Each save entry belongs to one player account (host = entry 0); the save's player array grows as needed. The table is kept per save slot in `BepInEx\config\azs1hd.moreplayers.saveentries.json` on the host |
+| The host sends the save to every joiner with "load entry 1" | Each joiner gets its own copy with its own entry index |
 | Spawn events, alive caps and dynamic ammo ignore the player count | Optional per-player scaling on the host |
 
-Source files: `Plugin.cs` (lobby and level size), `SaveSlots.cs` (per-player saves), `Scaling.cs` (difficulty).
+Source files: `Plugin.cs` (lobby and level size), `SaveSlots.cs`, `SaveEntryTable.cs` and `SaveJson.cs` (per-player
+saves), `Scaling.cs` (difficulty).
+
+Only the host's save matters: if you continue a save with a different host, the joiners get entries as they come.
 
 ## Building
 
@@ -75,6 +80,8 @@ dotnet build -c Release -p:GameDir="C:\Program Files (x86)\Steam\steamapps\commo
 
 `GameDir` can also come from the `AZS_GAME_DIR` environment variable; without either, the default Steam location is
 used. The plugin ends up in `bin/Release/net6.0/AZS1HD.MorePlayers.dll`.
+
+The save JSON helpers have game-independent tests: `cd tests/SaveJsonTests && dotnet run`.
 
 ## License
 
