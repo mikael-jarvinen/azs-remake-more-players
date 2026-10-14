@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.5.0
+- Fixed: with 3 or 4 players, joiners' loadouts could swap after a level change. 1.3.0 - 1.4.1 tied save entries to
+  network slots, which follow the order in which players finish loading into a level. Save entries now belong to the
+  player's account; the host remembers who owns which entry per save slot
+  (`BepInEx\config\azs1hd.moreplayers.saveentries.json`) and sends every joiner its own entry.
+- Everyone must update: 1.3.0 - 1.4.1 joiners still pick their entry by network slot. The first save after updating
+  assigns the entries in join order, so an already swapped loadout may stay swapped once; from then on it sticks.
+
 ## 1.4.1
 - Foveated rendering moved into its own mod ([azs-remake-foveated-rendering](https://github.com/mikael-jarvinen/azs-remake-foveated-rendering)).
 
