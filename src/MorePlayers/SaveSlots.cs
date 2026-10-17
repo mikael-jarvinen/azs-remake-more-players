@@ -26,6 +26,8 @@ namespace AZS1HD.MorePlayers;
 ///  - Host, when sending the save to a joiner: the save travels as JSON, once per recipient; the joiner's entry
 ///    index is written into its copy ("playerIndexToLoad").
 ///  - Host, on load: key items of players[2+] are moved to the host inventory, like the game does for players[1].
+/// The game reuses the slot's GameStateTO for every save (it only creates one, with 2 entries, for a new slot), so
+/// entries 2+ of players who miss a session are kept. Verified against the decompiled game (Ghidra), 2026-10-18.
 /// Network slots are NOT used: they follow the order players finish loading into a level and change between
 /// levels (1.3.0 - 1.4.1 keyed entries by slot, which swapped loadouts).
 /// </summary>
@@ -155,8 +157,27 @@ internal static class SaveSlotPatches
         }
     }
 
+    /// <summary>
+    /// True when <paramref name="data"/> is the checkpoint save itself. The savables also run on temporary copies:
+    /// the game's Sentry error reporter serializes a pooled GameStateTO (ClientSentryGameSystem.GetCurrentSaveGameData
+    /// -> GetCurrentGameStateSaveDataAsJsonString), on joiners as well. Those must not touch the entry table.
+    /// Only the save owner updates the savables of LastSavegame (Save -> SaveToStorage(LastSavegame, updateSavables)).
+    /// </summary>
+    private static bool IsRealSave(GameStateTO data)
+    {
+        try
+        {
+            if (data == null || !ClientGame.Exists) return false;
+            var last = ClientGame.Instance?.GetSystem<ClientSaveGameSystem>()?.LastSavegame;
+            return last != null && last.Pointer == data.Pointer;
+        }
+        catch { return false; }
+    }
+
     private static void BeginSave(GameStateTO data)
     {
+        current = null;
+        if (!IsRealSave(data)) return;   // error-report snapshot or other temporary copy: leave the game's behaviour alone
         SelfCheck();
         try { EnsureCapacity(data); } catch (Exception e) { Plugin.Logger.LogError($"Save capacity: {e}"); }
         current = data;
@@ -207,8 +228,9 @@ internal static class SaveSlotPatches
     }
 
     // ---- host: send each joiner its own entry -------------------------------------------------------------------
-    // ClientSaveGameSystem serializes the save once (with playerIndexToLoad = 1) and queues one transfer per remote
-    // player, also for players joining later. Each recipient gets its own copy with its own entry index; the
+    // At level start ClientSaveGameSystem serializes the save once (playerIndexToLoad = 1) and queues the same byte
+    // array for every remote player. A player joining mid-session gets LastSavegame serialized as stored
+    // (playerIndexToLoad = 0, i.e. the host's entry). Each recipient gets its own copy with its own entry index; the
     // shared buffer is never modified, because transfers are compressed asynchronously from it.
     [HarmonyPatch(typeof(LargeDataTransferSystem), nameof(LargeDataTransferSystem.QueueTransfer),
         new[] { typeof(LocalHost), typeof(RemoteHost), typeof(Il2CppStructArray<byte>), typeof(bool) })]

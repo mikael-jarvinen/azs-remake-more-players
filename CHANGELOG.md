@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.5.2
+- The save redirect only acts on the real checkpoint save. The game also runs the save code when its error reporter
+  takes a snapshot (on joiners too); those snapshots no longer touch the loadout ownership table.
+- Verified against the decompiled game: the slot's save object is reused for every save, so the loadouts of players
+  who miss a session are kept; new player entries are created complete; joiners load exactly the entry index sent.
+
 ## 1.5.1
 - Fixed: 1.5.0 crashed the host's game when a co-op level started (right after "Sending savegame to players") and at
   checkpoints with joiners. The generated interop wrapper for the game's account lookup reserves 8 bytes for a 16-byte
