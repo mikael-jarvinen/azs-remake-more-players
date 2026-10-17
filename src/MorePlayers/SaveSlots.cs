@@ -138,12 +138,21 @@ internal static class SaveSlotPatches
 
     private static int RedirectIndex(Entity pawn)
     {
-        var data = current;
-        if (data == null) return -1;
-        int i = EntryFor(data, pawn);
-        var players = data.players;
-        if (i < 0 || players == null || i >= players.Length || players[i] == null) return -1;
-        return i;
+        try
+        {
+            var data = current;
+            if (data == null) return -1;
+            int i = EntryFor(data, pawn);
+            var players = data.players;
+            if (i < 0 || players == null || i >= players.Length || players[i] == null) return -1;
+            return i;
+        }
+        catch (Exception e)
+        {
+            // never let the redirect stop the game's own save code
+            Plugin.Logger.LogError($"Save redirect failed, using the game's default entry: {e}");
+            return -1;
+        }
     }
 
     private static void BeginSave(GameStateTO data)
@@ -209,6 +218,8 @@ internal static class SaveSlotPatches
         try
         {
             if (data == null || data.Length < 64) return;
+            byte first = data[0];
+            if (first != (byte)'{' && first != 0xEF) return;   // saves are JSON (optionally with a UTF-8 BOM)
             byte[] bytes = data;   // managed copy
             if (!SaveJson.TryReadHeader(bytes, out var header)) return;
             if (!UserForHost(receivingHost, out string user, out string name))

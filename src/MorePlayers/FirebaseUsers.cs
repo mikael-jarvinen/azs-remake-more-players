@@ -71,7 +71,7 @@ internal static class FirebaseUsers
         return Invoke(map, localUserMethod, IntPtr.Zero, out userId, out name);
     }
 
-    private static unsafe bool Invoke(Il2CppObjectBase instance, IntPtr method, IntPtr firstArg, out string userId, out string name)
+    internal static unsafe bool Invoke(Il2CppObjectBase instance, IntPtr method, IntPtr firstArg, out string userId, out string name)
     {
         userId = null; name = null;
         // a zeroed boxed User; the game writes the struct into its data part

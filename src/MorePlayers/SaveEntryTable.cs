@@ -39,11 +39,24 @@ internal static class SaveEntryTable
         }
         catch (Exception e) { Plugin.Logger.LogWarning($"Save entry table unreadable, starting a new one: {e.Message}"); }
         table ??= new Dictionary<string, Dictionary<string, Owner>>();
+        foreach (var key in table.Keys.ToList())
+        {
+            var owners = table[key];
+            if (owners == null) { table.Remove(key); continue; }
+            foreach (var user in owners.Keys.ToList())
+                if (owners[user] == null || owners[user].Index < 1) owners.Remove(user);
+        }
     }
 
     private static void Store()
     {
-        try { File.WriteAllText(FilePath, JsonSerializer.Serialize(table, new JsonSerializerOptions { WriteIndented = true })); }
+        try
+        {
+            // write a temp file and swap it in, so a crash mid-write cannot leave a truncated table
+            string tmp = FilePath + ".tmp";
+            File.WriteAllText(tmp, JsonSerializer.Serialize(table, new JsonSerializerOptions { WriteIndented = true }));
+            File.Move(tmp, FilePath, overwrite: true);
+        }
         catch (Exception e) { Plugin.Logger.LogWarning($"Could not store the save entry table: {e.Message}"); }
     }
 
