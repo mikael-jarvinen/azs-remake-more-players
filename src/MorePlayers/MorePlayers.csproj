@@ -7,7 +7,7 @@
     <Nullable>disable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <Version>1.5.0</Version>
+    <Version>1.5.1</Version>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
     <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
@@ -45,6 +45,7 @@
     <Reference Include="Vertigo.Platform"><HintPath>$(Interop)/Vertigo.Platform.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Vertigo.Platform.Steam"><HintPath>$(Interop)/Vertigo.Platform.Steam.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="ThirdParty.Steamworks"><HintPath>$(Interop)/ThirdParty.Steamworks.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="ThirdParty.Firebase"><HintPath>$(Interop)/ThirdParty.Firebase.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Vertigo.Firebase"><HintPath>$(Interop)/Vertigo.Firebase.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Vertigo.Core"><HintPath>$(Interop)/Vertigo.Core.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Vertigo.Utility"><HintPath>$(Interop)/Vertigo.Utility.dll</HintPath><Private>false</Private></Reference>
