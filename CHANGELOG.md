@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.5.1
+- Fixed: 1.5.0 crashed the host's game when a co-op level started (right after "Sending savegame to players") and at
+  checkpoints with joiners. The generated interop wrapper for the game's account lookup reserves 8 bytes for a 16-byte
+  `User` struct, so the game overwrote the stack. The lookup is now called with a properly sized buffer.
+- The log shows `Player accounts: lookup works` at the first save of a session (once your account is linked to a
+  network session).
+- Hardening from a code review: an error in the save redirect falls back to the game's default instead of skipping
+  that player's save data; the ownership table is written atomically and tolerates broken entries; non-save network
+  transfers are no longer copied.
+
 ## 1.5.0
 - Fixed: with 3 or 4 players, joiners' loadouts could swap after a level change. 1.3.0 - 1.4.1 tied save entries to
   network slots, which follow the order in which players finish loading into a level. Save entries now belong to the

@@ -34,6 +34,7 @@ internal static class SaveSlotPatches
 {
     private static GameStateTO current;      // the GameStateTO being written right now (host side)
     private static bool loggedNoIdentity;
+    private static bool selfChecked;
 
     // ---- identity --------------------------------------------------------------------------------------------------
 
@@ -62,16 +63,24 @@ internal static class SaveSlotPatches
     private static bool UserForHost(Host host, out string userId, out string name)
     {
         userId = null; name = null;
+        try { return FirebaseUsers.TryGetForHost(UserMapping(), host, out userId, out name); }
+        catch (Exception e) { Plugin.Logger.LogWarning($"Player account lookup failed: {e.Message}"); return false; }
+    }
+
+    /// <summary>Once per session: check that the account lookup works, using the local player (also in solo play).</summary>
+    internal static void SelfCheck()
+    {
+        if (selfChecked) return;
         try
         {
             var map = UserMapping();
-            if (map == null || host == null) return false;
-            if (!map.TryGetFirebaseUserForHost(host, out User user) || string.IsNullOrEmpty(user.UserId)) return false;
-            userId = user.UserId;
-            try { name = user.DisplayName.ToString(); } catch { }
-            return true;
+            selfChecked = true;
+            if (map == null) { Plugin.Logger.LogWarning("Player accounts: the game's account mapping is not available; save entries fall back to the game's defaults."); return; }
+            bool ok = FirebaseUsers.TryGetLocal(map, out string id, out string name);
+            Plugin.Logger.LogInfo(ok ? $"Player accounts: lookup works (you are {name ?? "?"}, id {id.Length} chars)."
+                                     : "Player accounts: no local account found; save entries fall back to the game's defaults.");
         }
-        catch { return false; }
+        catch (Exception e) { selfChecked = true; Plugin.Logger.LogWarning($"Player accounts: self-check failed: {e.Message}"); }
     }
 
     /// <summary>Account id of a remote pawn (null when unknown).</summary>
@@ -129,16 +138,26 @@ internal static class SaveSlotPatches
 
     private static int RedirectIndex(Entity pawn)
     {
-        var data = current;
-        if (data == null) return -1;
-        int i = EntryFor(data, pawn);
-        var players = data.players;
-        if (i < 0 || players == null || i >= players.Length || players[i] == null) return -1;
-        return i;
+        try
+        {
+            var data = current;
+            if (data == null) return -1;
+            int i = EntryFor(data, pawn);
+            var players = data.players;
+            if (i < 0 || players == null || i >= players.Length || players[i] == null) return -1;
+            return i;
+        }
+        catch (Exception e)
+        {
+            // never let the redirect stop the game's own save code
+            Plugin.Logger.LogError($"Save redirect failed, using the game's default entry: {e}");
+            return -1;
+        }
     }
 
     private static void BeginSave(GameStateTO data)
     {
+        SelfCheck();
         try { EnsureCapacity(data); } catch (Exception e) { Plugin.Logger.LogError($"Save capacity: {e}"); }
         current = data;
     }
@@ -199,6 +218,8 @@ internal static class SaveSlotPatches
         try
         {
             if (data == null || data.Length < 64) return;
+            byte first = data[0];
+            if (first != (byte)'{' && first != 0xEF) return;   // saves are JSON (optionally with a UTF-8 BOM)
             byte[] bytes = data;   // managed copy
             if (!SaveJson.TryReadHeader(bytes, out var header)) return;
             if (!UserForHost(receivingHost, out string user, out string name))
